@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.DS_Store
+.idea/
+.vscode/
+
+# Output (keep dir via .gitkeep but ignore files)
+output/*
+!output/.gitkeep
