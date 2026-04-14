@@ -141,67 +141,101 @@ def extract_peaks(heatmap: np.ndarray,
 # Visualization
 # ----------------------------------------------------------------------------
 
-HEADER_HEIGHT = 220
+HEADER_HEIGHT = 260
 LINE_COLOR = (255, 100, 0)   # BGR — orange
+LINE_COLOR_5 = (0, 0, 255)   # BGR — red (top 5% emphasis)
 LINE_THICKNESS = 2
 DOT_COLOR = (0, 255, 0)      # BGR — green
 DOT_RADIUS = 5
 
 
 def render_annotated(img_bgr: np.ndarray, peaks: list[tuple[int, int]],
-                     scan_name: str) -> tuple[np.ndarray, dict[str, int]]:
-    """Draw detections + split lines + header. Returns (image, region_counts)."""
-    h, w = img_bgr.shape[:2]
-    y25 = int(h * 0.25)
-    y75 = int(h * 0.75)
+                     scan_name: str) -> tuple[np.ndarray, dict]:
+    """Draw detections + split lines + header.
 
-    # Count per region
+    Percentile lines are based on detected-pupa Y range:
+        0%   = bottommost pupa in image (TOP of pupa ranking, best)
+        100% = topmost pupa in image (BOTTOM of pupa ranking, worst)
+    Lines at rank 5%, 25%, 75%.
+    """
+    h, w = img_bgr.shape[:2]
+
+    # Default stats dict (in case no pupa detected)
     counts = {
-        "upper_25_of_image__bottom_25_of_pupae": 0,
-        "middle_50_of_image__middle_50_of_pupae": 0,
-        "lower_25_of_image__top_25_of_pupae": 0,
+        "top_5_pct": 0,
+        "rank_5_to_25_pct": 0,
+        "middle_50_pct": 0,
+        "bottom_25_pct": 0,
+        "y_min_of_pupae": None,
+        "y_max_of_pupae": None,
     }
-    for x, y in peaks:
-        if y < y25:
-            counts["upper_25_of_image__bottom_25_of_pupae"] += 1
-        elif y < y75:
-            counts["middle_50_of_image__middle_50_of_pupae"] += 1
-        else:
-            counts["lower_25_of_image__top_25_of_pupae"] += 1
+
+    if peaks:
+        ys = np.array([y for x, y in peaks])
+        y_min = int(ys.min())   # topmost pupa (smallest y) = worst rank
+        y_max = int(ys.max())   # bottommost pupa (largest y) = best rank
+        y_range = max(1, y_max - y_min)
+        counts["y_min_of_pupae"] = y_min
+        counts["y_max_of_pupae"] = y_max
+
+        # Line y for rank p (0 = best, 100 = worst)
+        def line_y(p: float) -> int:
+            return int(y_max - (p / 100.0) * y_range)
+
+        y_5  = line_y(5)
+        y_25 = line_y(25)
+        y_75 = line_y(75)
+
+        for x, y in peaks:
+            if y >= y_5:               # rank 0-5%
+                counts["top_5_pct"] += 1
+            elif y >= y_25:            # rank 5-25%
+                counts["rank_5_to_25_pct"] += 1
+            elif y >= y_75:            # rank 25-75%
+                counts["middle_50_pct"] += 1
+            else:                       # rank 75-100%
+                counts["bottom_25_pct"] += 1
+    else:
+        y_5 = y_25 = y_75 = None
 
     # Draw on a copy of the scan
     marked = img_bgr.copy()
     for x, y in peaks:
         cv2.circle(marked, (x, y), DOT_RADIUS, DOT_COLOR, -1)
-    cv2.line(marked, (0, y25), (w, y25), LINE_COLOR, LINE_THICKNESS)
-    cv2.line(marked, (0, y75), (w, y75), LINE_COLOR, LINE_THICKNESS)
-    cv2.putText(marked, "25% line", (w - 140, y25 - 8),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, LINE_COLOR, 1)
-    cv2.putText(marked, "75% line", (w - 140, y75 - 8),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, LINE_COLOR, 1)
+
+    if y_5 is not None:
+        cv2.line(marked, (0, y_5),  (w, y_5),  LINE_COLOR_5, LINE_THICKNESS)
+        cv2.line(marked, (0, y_25), (w, y_25), LINE_COLOR, LINE_THICKNESS)
+        cv2.line(marked, (0, y_75), (w, y_75), LINE_COLOR, LINE_THICKNESS)
+        cv2.putText(marked, "5% line",  (w - 140, y_5  - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, LINE_COLOR_5, 1)
+        cv2.putText(marked, "25% line", (w - 140, y_25 - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, LINE_COLOR, 1)
+        cv2.putText(marked, "75% line", (w - 140, y_75 - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, LINE_COLOR, 1)
 
     # Header canvas
     final = np.ones((h + HEADER_HEIGHT, w, 3), dtype=np.uint8) * 255
     final[HEADER_HEIGHT:, :] = marked
 
     font = cv2.FONT_HERSHEY_SIMPLEX
-    cv2.putText(final, scan_name, (20, 40), font, 0.9, (0, 0, 0), 2)
-    cv2.putText(final, f"Total detected: {len(peaks)}", (20, 75),
-                font, 0.7, (0, 0, 0), 2)
-    cv2.putText(final, "(BOTTOM of image = TOP of pupa ranking)",
-                (20, 105), font, 0.5, (80, 80, 80), 1)
-    cv2.putText(final,
-                f"Upper 25% of image (bottom 25% pupae): "
-                f"{counts['upper_25_of_image__bottom_25_of_pupae']}",
-                (20, 140), font, 0.55, (0, 0, 0), 2)
-    cv2.putText(final,
-                f"Middle 50% of image (middle 50% pupae): "
-                f"{counts['middle_50_of_image__middle_50_of_pupae']}",
-                (20, 170), font, 0.55, (0, 0, 0), 2)
-    cv2.putText(final,
-                f"Lower 25% of image (top 25% pupae): "
-                f"{counts['lower_25_of_image__top_25_of_pupae']}",
-                (20, 200), font, 0.55, (0, 0, 0), 2)
+    cv2.putText(final, scan_name, (20, 35), font, 0.8, (0, 0, 0), 2)
+    cv2.putText(final, f"Total detected: {len(peaks)}", (20, 65),
+                font, 0.65, (0, 0, 0), 2)
+    cv2.putText(final, "Rank lines = percentiles of detected-pupa Y range",
+                (20, 90), font, 0.45, (80, 80, 80), 1)
+    cv2.putText(final, "(0% = best pupa at image BOTTOM ; 100% = worst pupa at image TOP)",
+                (20, 110), font, 0.42, (80, 80, 80), 1)
+
+    y_text = 140
+    cv2.putText(final, f"Rank  0 - 5%   (top 5% - BEST):       {counts['top_5_pct']}",
+                (20, y_text), font, 0.55, LINE_COLOR_5, 2)
+    cv2.putText(final, f"Rank  5 - 25%  (next tier):           {counts['rank_5_to_25_pct']}",
+                (20, y_text + 30), font, 0.55, (0, 0, 0), 2)
+    cv2.putText(final, f"Rank 25 - 75%  (middle 50%):          {counts['middle_50_pct']}",
+                (20, y_text + 60), font, 0.55, (0, 0, 0), 2)
+    cv2.putText(final, f"Rank 75 - 100% (bottom 25% - WORST):  {counts['bottom_25_pct']}",
+                (20, y_text + 90), font, 0.55, (0, 0, 0), 2)
     return final, counts
 
 
@@ -211,9 +245,11 @@ def render_annotated(img_bgr: np.ndarray, peaks: list[tuple[int, int]],
 
 EXCEL_HEADERS = [
     "scan_name", "timestamp", "total_count",
-    "bottom_25_pupae_count",   # upper 25% of image
-    "middle_50_pupae_count",   # middle 50% of image
-    "top_25_pupae_count",      # lower 25% of image
+    "top_5_pct_count",         # rank 0-5% (best)
+    "rank_5_to_25_pct_count",  # rank 5-25%
+    "middle_50_pct_count",     # rank 25-75%
+    "bottom_25_pct_count",     # rank 75-100% (worst)
+    "y_min_of_pupae", "y_max_of_pupae",
     "image_width", "image_height",
 ]
 
@@ -240,9 +276,12 @@ def append_to_excel(excel_path: Path, scan_name: str, counts: dict,
         scan_name,
         datetime.now().isoformat(timespec="seconds"),
         total,
-        counts["upper_25_of_image__bottom_25_of_pupae"],
-        counts["middle_50_of_image__middle_50_of_pupae"],
-        counts["lower_25_of_image__top_25_of_pupae"],
+        counts["top_5_pct"],
+        counts["rank_5_to_25_pct"],
+        counts["middle_50_pct"],
+        counts["bottom_25_pct"],
+        counts["y_min_of_pupae"],
+        counts["y_max_of_pupae"],
         img_w,
         img_h,
     ])
@@ -273,9 +312,10 @@ def process_one(model: TinyUNet, device: torch.device, src: Path,
     append_to_excel(excel_path, src.name, counts, len(peaks), w, h)
 
     print(f"[done] {src.name:40s} total={len(peaks):4d}  "
-          f"bottom25={counts['upper_25_of_image__bottom_25_of_pupae']:3d}  "
-          f"middle50={counts['middle_50_of_image__middle_50_of_pupae']:3d}  "
-          f"top25={counts['lower_25_of_image__top_25_of_pupae']:3d}  "
+          f"top5%={counts['top_5_pct']:3d}  "
+          f"5-25%={counts['rank_5_to_25_pct']:3d}  "
+          f"mid50%={counts['middle_50_pct']:3d}  "
+          f"bot25%={counts['bottom_25_pct']:3d}  "
           f"-> {out_img.name}")
 
 

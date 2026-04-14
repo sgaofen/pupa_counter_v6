@@ -19,20 +19,32 @@ For every scan you feed it, the program:
 
 1. Runs the v6 CNN and extracts pupa center locations.
 2. Draws a green dot on each detected pupa.
-3. Splits the image with two horizontal lines at 25% and 75% height, and
-   reports how many pupae fall in each band.
-4. Saves the annotated image to `output/`.
-5. Appends one row to `output/pupa_counts.xlsx` — re-run it on new scans
+3. Computes **three rank percentile lines** at 5%, 25%, 75% of the detected-
+   pupa Y range (not the image height — the topmost/bottommost detected
+   pupa define 0% / 100%).
+4. Reports pupa counts in four bands.
+5. Saves the annotated image to `output/`.
+6. Appends one row to `output/pupa_counts.xlsx` — re-run it on new scans
    and the Excel keeps growing.
 
-The split lines follow the lab convention that the **physical top of the
-pupa ranking appears at the bottom of the image**:
+The rank convention follows the lab's sorting workflow where the **top of
+the pupa ranking is at the BOTTOM of the image**:
 
-| Band in image | Meaning |
+| Image Y-coord | Rank % | Meaning |
+|---|---|---|
+| Bottommost pupa  | 0%   | Best pupa (top of ranking) |
+| Topmost pupa     | 100% | Worst pupa (bottom of ranking) |
+
+Four regions & counts reported:
+
+| Band       | Meaning |
 |---|---|
-| Upper 25% of image  | Bottom 25% of pupae (lowest rank) |
-| Middle 50% of image | Middle 50% of pupae |
-| Lower 25% of image  | Top 25% of pupae (highest rank) |
+| Rank 0 - 5%    | Top 5% best pupae (red line in image) |
+| Rank 5 - 25%   | Next tier |
+| Rank 25 - 75%  | Middle 50% |
+| Rank 75 - 100% | Bottom 25% worst pupae |
+
+The 5% line is drawn in red; 25% and 75% in orange.
 
 ## Accuracy (on 60 labeled scans, 6267 pupae total)
 
@@ -110,10 +122,12 @@ python pupa_counter.py scans/ \
 | `scan_name` | Source filename |
 | `timestamp` | ISO-8601 time of processing |
 | `total_count` | All pupae detected |
-| `bottom_25_pupae_count` | Pupae in upper 25% of image (lowest rank) |
-| `middle_50_pupae_count` | Pupae in middle 50% of image |
-| `top_25_pupae_count`    | Pupae in lower 25% of image (highest rank) |
-| `image_width`, `image_height` | Original scan dimensions |
+| `top_5_pct_count`        | Pupae at rank 0-5% (best) |
+| `rank_5_to_25_pct_count` | Pupae at rank 5-25% |
+| `middle_50_pct_count`    | Pupae at rank 25-75% (middle 50%) |
+| `bottom_25_pct_count`    | Pupae at rank 75-100% (worst) |
+| `y_min_of_pupae`, `y_max_of_pupae` | Pixel Y coordinates used for percentile calc |
+| `image_width`, `image_height`      | Original scan dimensions |
 
 Existing files are appended to; delete the file to start fresh.
 
