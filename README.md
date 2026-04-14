@@ -1,7 +1,9 @@
-# Pupa Counter v6
+# Pupa Counter (v6 + v7)
 
 Automatic silkworm-pupa counter for 300 dpi paper-sheet scans, built on a
-lightweight U-Net (466K params) trained on 60 hand-corrected scans.
+lightweight U-Net (466K params). **v7 default** (trained on 99 hand-corrected
+scans, ~10,200 pupae). v6 included as a reference checkpoint (trained on 60
+scans).
 
 One command per scan: you get an annotated PNG and a running Excel log of
 counts. No cloud service, no API key, all inference runs locally on CPU,
@@ -46,16 +48,17 @@ Four regions & counts reported:
 
 The 5% line is drawn in red; 25% and 75% in orange.
 
-## Accuracy (on 60 labeled scans, 6267 pupae total)
+## Accuracy
 
-| Metric | v6 value |
-|---|---|
-| Precision | 97.31% |
-| Recall    | 98.63% |
-| F1        | **98.10%** |
-| Scans with zero errors | 3 / 60 |
-| Scans with ≤ 2 errors  | 18 / 60 |
-| Average errors / scan  | 4.0 |
+| Model | Training data | Self-eval F1 | Notes |
+|---|---|---|---|
+| v6 | 60 scans / 6267 pupae | **98.10%** | added anti-FP loss term; strong baseline |
+| **v7** (default) | **99 scans / 10,196 pupae** | **97.62%** | cleaner labels, more edge pupae, larger scale |
+
+v7's self-eval F1 is slightly lower than v6's, but v7 trains on more diverse data
+(including scans with ambiguous stains, edge pupae, and heavily-overlapping
+clusters). For generalization to previously unseen scans v7 is expected to be
+stronger. If you want the higher self-eval baseline, pass `--model model/pupa_counter_v6.pt`.
 
 Everything runs at ~0.6 s per scan on Apple M4 (10-core MPS).
 

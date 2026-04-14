@@ -332,8 +332,8 @@ def main() -> None:
                         help="Excel file to append counts to "
                              "(default: ./output/pupa_counts.xlsx)")
     parser.add_argument("--model", type=Path,
-                        default=Path(__file__).resolve().parent / "model" / "pupa_counter_v6.pt",
-                        help="Path to model weights (default: ./model/pupa_counter_v6.pt)")
+                        default=Path(__file__).resolve().parent / "model" / "pupa_counter_v7.pt",
+                        help="Path to model weights (default: ./model/pupa_counter_v7.pt)")
     args = parser.parse_args()
 
     device = pick_device()
