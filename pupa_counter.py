@@ -138,6 +138,72 @@ def extract_peaks(heatmap: np.ndarray,
 
 
 # ----------------------------------------------------------------------------
+# Peak-level false-positive classifier (optional 2nd-stage filter)
+# ----------------------------------------------------------------------------
+
+CLASSIFIER_PATH = Path(__file__).resolve().parent / "model" / "peak_filter_clf.pkl"
+CLASSIFIER_THRESHOLD = 0.60  # keep peak if P(real) >= this
+
+
+def _peak_features(peaks: list[tuple[int, int]], heatmap: np.ndarray,
+                   rgb: np.ndarray) -> np.ndarray:
+    """11-dim feature per peak: score, local heat stats, color scores, neighbors, edge distance."""
+    if len(peaks) == 0:
+        return np.zeros((0, 11), dtype=np.float32)
+    r = rgb[..., 0].astype(np.float32)
+    g = rgb[..., 1].astype(np.float32)
+    b = rgb[..., 2].astype(np.float32)
+    yellow = np.clip((np.minimum(r, g) - b - 15) / 60, 0, 1)
+    blue = np.clip((b - np.maximum(r, g) - 15) / 60, 0, 1)
+    gray = (0.3 * r + 0.59 * g + 0.11 * b) / 255.0
+    H, W = heatmap.shape
+
+    scores = [float(heatmap[y, x]) for x, y in peaks]
+    feats = np.zeros((len(peaks), 11), dtype=np.float32)
+    for i, (xi, yi) in enumerate(peaks):
+        si = scores[i]
+        y0, y1 = max(0, yi - 4), min(H, yi + 5)
+        x0, x1 = max(0, xi - 4), min(W, xi + 5)
+        y0b, y1b = max(0, yi - 8), min(H, yi + 9)
+        x0b, x1b = max(0, xi - 8), min(W, xi + 9)
+        # Nearest neighbor
+        nn_d, nn_s = 9999.0, 0.0
+        for j, (xj, yj) in enumerate(peaks):
+            if i == j:
+                continue
+            d = ((xi - xj) ** 2 + (yi - yj) ** 2) ** 0.5
+            if d < nn_d:
+                nn_d = d
+                nn_s = scores[j]
+        edge_d = float(min(xi, yi, W - xi - 1, H - yi - 1))
+        feats[i] = [
+            si,                                     # peak score
+            float(heatmap[y0:y1, x0:x1].mean()),     # heat 5x5 mean
+            float(heatmap[y0b:y1b, x0b:x1b].mean()), # heat 9x9 mean
+            float(heatmap[y0:y1, x0:x1].std()),      # heat 5x5 std
+            float(yellow[y0b:y1b, x0b:x1b].mean()),  # yellow 9x9 mean
+            float(yellow[y0b:y1b, x0b:x1b].max()),   # yellow 9x9 max
+            float(gray[y0b:y1b, x0b:x1b].mean()),    # gray 9x9 mean
+            float(blue[y0b:y1b, x0b:x1b].mean()),    # blue 9x9 mean
+            float(nn_d),                             # nearest neighbor distance
+            float(nn_s),                             # nearest neighbor score
+            edge_d,                                  # distance to image border
+        ]
+    return feats
+
+
+def filter_false_positives(peaks: list[tuple[int, int]], heatmap: np.ndarray,
+                           rgb: np.ndarray, classifier,
+                           threshold: float = CLASSIFIER_THRESHOLD) -> list[tuple[int, int]]:
+    """Drop peaks the classifier thinks are false positives."""
+    if len(peaks) == 0 or classifier is None:
+        return peaks
+    feats = _peak_features(peaks, heatmap, rgb)
+    probs = classifier.predict_proba(feats)[:, 1]
+    return [p for p, prob in zip(peaks, probs) if prob >= threshold]
+
+
+# ----------------------------------------------------------------------------
 # Visualization
 # ----------------------------------------------------------------------------
 
@@ -293,7 +359,7 @@ def append_to_excel(excel_path: Path, scan_name: str, counts: dict,
 # ----------------------------------------------------------------------------
 
 def process_one(model: TinyUNet, device: torch.device, src: Path,
-                out_dir: Path, excel_path: Path) -> None:
+                out_dir: Path, excel_path: Path, classifier=None) -> None:
     img_bgr = cv2.imread(str(src))
     if img_bgr is None:
         print(f"[skip] could not read {src}")
@@ -301,7 +367,16 @@ def process_one(model: TinyUNet, device: torch.device, src: Path,
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
     heatmap = predict_heatmap(model, img_rgb, device)
-    peaks = extract_peaks(heatmap)
+    raw_peaks = extract_peaks(heatmap)
+
+    # Optional 2nd-stage filter: drop peaks the classifier thinks are FPs
+    if classifier is not None:
+        peaks = filter_false_positives(raw_peaks, heatmap, img_rgb, classifier)
+        n_filtered = len(raw_peaks) - len(peaks)
+    else:
+        peaks = raw_peaks
+        n_filtered = 0
+
     annotated, counts = render_annotated(img_bgr, peaks, src.name)
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -311,7 +386,8 @@ def process_one(model: TinyUNet, device: torch.device, src: Path,
     h, w = img_bgr.shape[:2]
     append_to_excel(excel_path, src.name, counts, len(peaks), w, h)
 
-    print(f"[done] {src.name:40s} total={len(peaks):4d}  "
+    filter_info = f"(filtered {n_filtered} FPs)" if n_filtered > 0 else ""
+    print(f"[done] {src.name:40s} total={len(peaks):4d} {filter_info:>18}  "
           f"top5%={counts['top_5_pct']:3d}  "
           f"5-25%={counts['rank_5_to_25_pct']:3d}  "
           f"mid50%={counts['middle_50_pct']:3d}  "
@@ -332,8 +408,10 @@ def main() -> None:
                         help="Excel file to append counts to "
                              "(default: ./output/pupa_counts.xlsx)")
     parser.add_argument("--model", type=Path,
-                        default=Path(__file__).resolve().parent / "model" / "pupa_counter_v7.pt",
-                        help="Path to model weights (default: ./model/pupa_counter_v7.pt)")
+                        default=Path(__file__).resolve().parent / "model" / "pupa_counter_v6.pt",
+                        help="Path to model weights (default: ./model/pupa_counter_v6.pt)")
+    parser.add_argument("--no-filter", action="store_true",
+                        help="Disable the peak-level FP classifier (useful for debugging).")
     args = parser.parse_args()
 
     device = pick_device()
@@ -347,6 +425,16 @@ def main() -> None:
     model.load_state_dict(torch.load(args.model, map_location=device))
     model.eval()
     print(f"Loaded {args.model.name}")
+
+    # Load classifier if present and not disabled
+    classifier = None
+    if not args.no_filter and CLASSIFIER_PATH.exists():
+        import pickle
+        with open(CLASSIFIER_PATH, "rb") as f:
+            classifier = pickle.load(f)
+        print(f"Loaded 2nd-stage filter: {CLASSIFIER_PATH.name}")
+    elif args.no_filter:
+        print("2nd-stage filter DISABLED (via --no-filter)")
 
     # Gather inputs
     if args.input.is_dir():
@@ -365,7 +453,7 @@ def main() -> None:
     args.excel.parent.mkdir(parents=True, exist_ok=True)
 
     for img_path in images:
-        process_one(model, device, img_path, args.out, args.excel)
+        process_one(model, device, img_path, args.out, args.excel, classifier=classifier)
 
     print(f"\nDone. Annotated images: {args.out}")
     print(f"Excel log: {args.excel}")

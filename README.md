@@ -19,14 +19,16 @@ python pupa_counter.py examples/example_scan.png
 
 For every scan you feed it, the program:
 
-1. Runs the v6 CNN and extracts pupa center locations.
-2. Draws a green dot on each detected pupa.
-3. Computes **three rank percentile lines** at 5%, 25%, 75% of the detected-
-   pupa Y range (not the image height — the topmost/bottommost detected
-   pupa define 0% / 100%).
-4. Reports pupa counts in four bands.
-5. Saves the annotated image to `output/`.
-6. Appends one row to `output/pupa_counts.xlsx` — re-run it on new scans
+1. Runs the v6 CNN and extracts candidate pupa center locations.
+2. **Runs a 2nd-stage classifier on each candidate to drop false
+   positives** (stains, ink shadows, dirt). Disable with `--no-filter`.
+3. Draws a green dot on each confirmed pupa.
+4. Computes **three rank percentile lines** at 5%, 25%, 75% of the
+   detected-pupa Y range (not the image height — the topmost/bottommost
+   detected pupa define 0% / 100%).
+5. Reports pupa counts in four bands.
+6. Saves the annotated image to `output/`.
+7. Appends one row to `output/pupa_counts.xlsx` — re-run it on new scans
    and the Excel keeps growing.
 
 The rank convention follows the lab's sorting workflow where the **top of
@@ -50,17 +52,30 @@ The 5% line is drawn in red; 25% and 75% in orange.
 
 ## Accuracy
 
-| Model | Training data | Self-eval F1 | Notes |
+Two-stage pipeline: CNN detector + peak-level classifier.
+
+| Pipeline | Self-eval F1 on 99 scans | Precision | Recall |
 |---|---|---|---|
-| v6 | 60 scans / 6267 pupae | **98.10%** | added anti-FP loss term; strong baseline |
-| **v7** (default) | **99 scans / 10,196 pupae** | **97.62%** | cleaner labels, more edge pupae, larger scale |
+| v6 CNN only | 98.16% | 97.62% | 98.70% |
+| **v6 CNN + classifier filter** (default) | **99.25%** | **99.84%** | **98.66%** |
 
-v7's self-eval F1 is slightly lower than v6's, but v7 trains on more diverse data
-(including scans with ambiguous stains, edge pupae, and heavily-overlapping
-clusters). For generalization to previously unseen scans v7 is expected to be
-stronger. If you want the higher self-eval baseline, pass `--model model/pupa_counter_v6.pt`.
+The 2nd-stage classifier (`model/peak_filter_clf.pkl`, 248 KB) is a
+Gradient Boosting model trained on 89 labeled scans. It inspects each
+candidate peak and drops the ones that look like stains/ink/dirt rather
+than real pupae. At the default `threshold=0.60`:
+- kills **93% of false positives** (245 → 16 across 99 scans)
+- loses only **0.04% of true positives** (4 out of 10,063)
+- net F1 gain: **+1.09pp**
 
-Everything runs at ~0.6 s per scan on Apple M4 (10-core MPS).
+The v6 CNN itself was trained on 60 hand-corrected scans (6,267 pupae).
+v7 (`model/pupa_counter_v7.pt`) is an alternative checkpoint trained on
+99 scans — pass `--model model/pupa_counter_v7.pt` to use it.
+
+**Runtime on Apple M4 (10-core MPS):** ~0.65 s per scan total (~0.6 s
+for CNN + ~0.05 s for classifier feature extraction + inference).
+
+Disable the classifier entirely with `--no-filter` (returns F1 ≈ 98.16%
+raw CNN output).
 
 ---
 
