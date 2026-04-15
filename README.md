@@ -54,18 +54,19 @@ The 5% line is drawn in red; 25% and 75% in orange.
 
 Two-stage pipeline: CNN detector + peak-level classifier.
 
-| Pipeline | Self-eval F1 on 99 scans | Precision | Recall |
+| Pipeline | Self-eval F1 on 99 scans (cleaned labels) | Precision | Recall |
 |---|---|---|---|
-| v6 CNN only | 98.16% | 97.62% | 98.70% |
-| **v6 CNN + classifier filter** (default) | **99.25%** | **99.84%** | **98.66%** |
+| v6 CNN only | 98.05% | 97.40% | 98.70% |
+| **v6 CNN + classifier filter** (default) | **99.34%** | **99.99%** | **98.70%** |
 
-The 2nd-stage classifier (`model/peak_filter_clf.pkl`, 248 KB) is a
-Gradient Boosting model trained on 89 labeled scans. It inspects each
-candidate peak and drops the ones that look like stains/ink/dirt rather
-than real pupae. At the default `threshold=0.60`:
-- kills **93% of false positives** (245 → 16 across 99 scans)
-- loses only **0.04% of true positives** (4 out of 10,063)
-- net F1 gain: **+1.09pp**
+The 2nd-stage classifier (`model/peak_filter_clf.pkl`, ~360 KB) is a
+Gradient Boosting model trained on all 99 labeled scans (10,172 sure
+labels after manual label cleanup). It inspects each candidate peak and
+drops stains/ink/dirt that look like pupae. At the default
+`threshold=0.60`:
+- kills **99.6% of false positives** (268 → 1 across 99 scans)
+- loses **zero** true positives
+- net F1 gain: **+1.29pp** on cleaned ground truth
 
 The v6 CNN itself was trained on 60 hand-corrected scans (6,267 pupae).
 v7 (`model/pupa_counter_v7.pt`) is an alternative checkpoint trained on
