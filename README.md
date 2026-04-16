@@ -2,9 +2,9 @@
 
 Automatic silkworm-pupa counter for 300 dpi paper-sheet scans, built on a
 lightweight U-Net (466K params). **v12 default** (fresh-trained on 99
-hand-corrected scans, ~10,170 sure labels after label cleanup + scanner
-black-border handling, with per-pixel spatial loss weighting). v6/v7/v11
-shipped as reference checkpoints.
+hand-corrected scans, ~10,144 sure labels after multiple rounds of label
+cleanup + scanner black-border handling, with per-pixel spatial loss
+weighting). v6/v7/v11 shipped as reference checkpoints.
 
 One command per scan: you get an annotated PNG and a running Excel log of
 counts. No cloud service, no API key, all inference runs locally on CPU,
