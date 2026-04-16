@@ -1,9 +1,10 @@
-# Pupa Counter (v11)
+# Pupa Counter (v12)
 
 Automatic silkworm-pupa counter for 300 dpi paper-sheet scans, built on a
-lightweight U-Net (466K params). **v11 default** (warm-started from v6,
-trained on 99 hand-corrected scans, ~10,172 sure labels after a manual
-label-cleanup pass). v6 and v7 shipped as reference checkpoints.
+lightweight U-Net (466K params). **v12 default** (fresh-trained on 99
+hand-corrected scans, ~10,170 sure labels after label cleanup + scanner
+black-border handling, with per-pixel spatial loss weighting). v6/v7/v11
+shipped as reference checkpoints.
 
 One command per scan: you get an annotated PNG and a running Excel log of
 counts. No cloud service, no API key, all inference runs locally on CPU,
@@ -19,7 +20,7 @@ python pupa_counter.py examples/example_scan.png
 
 For every scan you feed it, the program:
 
-1. Runs the v11 CNN and extracts candidate pupa center locations.
+1. Runs the v12 CNN and extracts candidate pupa center locations.
 2. **Runs a 2nd-stage classifier on each candidate to drop false
    positives** (stains, ink shadows, dirt). Disable with `--no-filter`.
 3. Draws a green dot on each confirmed pupa.
@@ -56,35 +57,41 @@ Two-stage pipeline: CNN detector + peak-level classifier.
 
 | Pipeline | Self-eval F1 on 99 scans (cleaned labels) | Precision | Recall |
 |---|---|---|---|
-| v11 CNN only | 97.89% | 96.96% | 98.83% |
-| **v11 CNN + classifier filter** (default) | **99.41%** | **100.00%** | **98.83%** |
-| v6 CNN + classifier v3 (legacy) | 99.22% | 99.87% | 98.58% |
+| v12 CNN only | 98.30% | 97.69% | 98.93% |
+| **v12 CNN + classifier filter** (default) | **99.46%** | **100.00%** | **98.93%** |
+| v11 CNN + classifier v4 (legacy) | 99.42% | 100.00% | 98.85% |
+| v6 CNN + classifier v3 (legacy) | 99.23% | 99.87% | 98.60% |
 
 The 2nd-stage classifier (`model/peak_filter_clf.pkl`, ~360 KB) is a
-Gradient Boosting model trained on all 99 labeled scans using v11's own
-detection outputs. At the default `threshold=0.60` it kills **100% of
-false positives** (315 → 0 across 99 scans) while losing **zero** true
-positives. Net F1 gain over raw CNN: **+1.52pp**.
+Gradient Boosting model trained on v12's own detection outputs across
+all 99 labeled scans. At the default `threshold=0.60` it kills **100% of
+false positives** (238 → 0 across 99 scans) while losing **zero** true
+positives. Net F1 gain over raw CNN: **+1.16pp**.
 
-The 119 remaining misses are overwhelmingly edge pupae (81 within 30px of
-image border, 72 of those on the left edge where the scanner tends to
-cut pupae in half). These are largely a physical/hardware limit — half a
-pupa is hard to detect unambiguously.
+The 109 remaining misses are overwhelmingly edge pupae (71 within 30px
+of image border, most of those on the left edge where the scanner
+tends to cut pupae in half). These are largely a physical/hardware
+limit — half a pupa is hard to detect unambiguously.
 
-**Why v11 over v6:** v11 was retrained on 99 cleaned scans (vs v6's 60
-old labels), using v6 as warm-start init, with no other recipe changes.
-Paired with a classifier trained specifically on v11's FP distribution,
-the combo reaches perfect precision on self-eval while holding recall.
-v6 (`model/pupa_counter_v6.pt`) and v7 (`model/pupa_counter_v7.pt`) are
-retained as reference checkpoints — pass `--model model/pupa_counter_v6.pt`
-to reproduce prior numbers. Note: pairing v6 with the new classifier
-produces a mismatched combo; use `model/peak_filter_clf_v3.pkl` alongside
-v6 if you need the original 99.22% pipeline.
+**Why v12 over v11:** v12 was re-trained fresh (random init, no warm
+start) on 99 cleaned scans after a manual label cleanup pass that
+removed 2 out-of-image labels and moved 61 labels from inside the 7-8px
+black scanner border onto the first paper pixel. The training loss uses
+a per-pixel spatial underpred weighting (0.75 near the measured left
+border, ramping to 1.5 on paper interior) so the model does not waste
+gradient capacity on the physically unrecoverable half-cut pupae. The
+result: 8 more true positives (8 more pupae found that v11 missed),
+same zero false positives after classifier, ~0.04pp pipeline F1 gain.
+
+v6 (`model/pupa_counter_v6.pt`), v7 (`model/pupa_counter_v7.pt`), and
+v11 (`model/pupa_counter_v11.pt`) are retained as reference checkpoints.
+Pair them with their matching classifier (`peak_filter_clf_v3.pkl` for
+v6, `peak_filter_clf_v4.pkl` for v11) to reproduce prior numbers.
 
 **Runtime on Apple M4 (10-core MPS):** ~0.65 s per scan total (~0.6 s
 for CNN + ~0.05 s for classifier feature extraction + inference).
 
-Disable the classifier entirely with `--no-filter` (returns F1 ≈ 97.89%
+Disable the classifier entirely with `--no-filter` (returns F1 ≈ 98.30%
 raw CNN output).
 
 ---
@@ -140,7 +147,7 @@ accumulating rows.
 python pupa_counter.py scans/ \
     --out results/ \
     --excel results/my_counts.xlsx \
-    --model model/pupa_counter_v11.pt
+    --model model/pupa_counter_v12.pt
 ```
 
 ### Output Excel columns
@@ -213,7 +220,7 @@ many blank-area false positives appear.
 Install it: `pip install openpyxl`
 
 **"model weights not found"**
-The repo ships `model/pupa_counter_v11.pt` (1.9 MB). Check it wasn't skipped
+The repo ships `model/pupa_counter_v12.pt` (1.9 MB). Check it wasn't skipped
 during clone (LFS-style). Alternatively pass `--model /path/to/weights.pt`.
 
 **Really slow on CPU**

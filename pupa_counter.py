@@ -1,8 +1,9 @@
 """Pupa Counter — standalone inference + Excel export.
 
-Default pipeline: v11 CNN (warm-started from v6, trained on 99 cleaned
-scans, 10,172 sure labels) + peak-level classifier (trained on v11's own
-FP distribution). Self-eval F1 = 99.41% with 100% precision.
+Default pipeline: v12 CNN (fresh-trained on 99 cleaned scans with
+per-pixel spatial UP weighting that lightens the penalty on the 7-8px
+black scanner-border region and amplifies it on paper interior) +
+matched peak-level classifier. Self-eval F1 = 99.46% with 100% precision.
 
 Usage:
     # Count pupae in a single scan
@@ -15,7 +16,7 @@ Usage:
     python pupa_counter.py scans/ --out results/ --excel my_counts.xlsx
 
 For each scan the script:
-  1. Runs the v11 CNN model on the image.
+  1. Runs the v12 CNN model on the image.
   2. Detects pupa centers via heatmap peak extraction.
   3. Splits the image at 25% and 75% horizontal lines.
      Convention: BOTTOM of image = TOP of pupa ranking (best pupae).
@@ -412,8 +413,8 @@ def main() -> None:
                         help="Excel file to append counts to "
                              "(default: ./output/pupa_counts.xlsx)")
     parser.add_argument("--model", type=Path,
-                        default=Path(__file__).resolve().parent / "model" / "pupa_counter_v11.pt",
-                        help="Path to model weights (default: ./model/pupa_counter_v11.pt)")
+                        default=Path(__file__).resolve().parent / "model" / "pupa_counter_v12.pt",
+                        help="Path to model weights (default: ./model/pupa_counter_v12.pt)")
     parser.add_argument("--no-filter", action="store_true",
                         help="Disable the peak-level FP classifier (useful for debugging).")
     args = parser.parse_args()
