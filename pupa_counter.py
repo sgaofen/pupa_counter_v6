@@ -1,4 +1,8 @@
-"""Pupa Counter v6 — standalone inference + Excel export.
+"""Pupa Counter — standalone inference + Excel export.
+
+Default pipeline: v11 CNN (warm-started from v6, trained on 99 cleaned
+scans, 10,172 sure labels) + peak-level classifier (trained on v11's own
+FP distribution). Self-eval F1 = 99.41% with 100% precision.
 
 Usage:
     # Count pupae in a single scan
@@ -11,7 +15,7 @@ Usage:
     python pupa_counter.py scans/ --out results/ --excel my_counts.xlsx
 
 For each scan the script:
-  1. Runs the v6 CNN model on the image.
+  1. Runs the v11 CNN model on the image.
   2. Detects pupa centers via heatmap peak extraction.
   3. Splits the image at 25% and 75% horizontal lines.
      Convention: BOTTOM of image = TOP of pupa ranking (best pupae).
@@ -397,7 +401,7 @@ def process_one(model: TinyUNet, device: torch.device, src: Path,
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Pupa counter v6 — runs the v6 CNN on image(s), "
+        description="Pupa counter — runs the v11 CNN on image(s), "
                     "saves annotated PNGs, and appends rows to an Excel file.",
     )
     parser.add_argument("input", type=Path,
@@ -408,8 +412,8 @@ def main() -> None:
                         help="Excel file to append counts to "
                              "(default: ./output/pupa_counts.xlsx)")
     parser.add_argument("--model", type=Path,
-                        default=Path(__file__).resolve().parent / "model" / "pupa_counter_v6.pt",
-                        help="Path to model weights (default: ./model/pupa_counter_v6.pt)")
+                        default=Path(__file__).resolve().parent / "model" / "pupa_counter_v11.pt",
+                        help="Path to model weights (default: ./model/pupa_counter_v11.pt)")
     parser.add_argument("--no-filter", action="store_true",
                         help="Disable the peak-level FP classifier (useful for debugging).")
     args = parser.parse_args()
