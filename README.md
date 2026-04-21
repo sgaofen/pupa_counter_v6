@@ -29,8 +29,14 @@ For every scan you feed it, the program:
    detected pupa define 0% / 100%).
 5. Reports pupa counts in four bands.
 6. Saves the annotated image to `output/`.
-7. Appends one row to `output/pupa_counts.xlsx` — re-run it on new scans
-   and the Excel keeps growing.
+7. Appends two rows to `output/pupa_counts.xlsx`:
+   - **Summary sheet** (`Pupa counts`): one row per scan with counts and
+     band breakdown.
+   - **Per-pupa detail sheet** (`Per pupa detail`): one row per detected
+     pupa with exact `(x_pixel, y_pixel, rank_pct, band, image_height)`.
+8. At the end of a batch run, writes `output/rank_distribution.png` — a
+   global rank histogram plus per-scan small multiples so you can see
+   how each vial's pupae are distributed vertically.
 
 The rank convention is purely positional — no value judgement:
 
@@ -67,20 +73,45 @@ all 99 labeled scans. At the default `threshold=0.60` it kills **100% of
 false positives** (238 → 0 across 99 scans) while losing **zero** true
 positives. Net F1 gain over raw CNN: **+1.16pp**.
 
-The 109 remaining misses are overwhelmingly edge pupae (71 within 30px
-of image border, most of those on the left edge where the scanner
-tends to cut pupae in half). These are largely a physical/hardware
-limit — half a pupa is hard to detect unambiguously.
+The 109 remaining misses break down by precise per-scan black-border
+measurement (border width is typically 6-8 px, measured automatically):
+
+| Region | Pupae | Misses | Miss rate |
+|---|---|---|---|
+| Interior (≥10 px from any edge) | 9,972 | 42 | **0.42%** |
+| Paper edge zone (<10 px from edge) | 172 | 67 | **38.95%** |
+
+Interior miss rate of 0.42% is within human-recount agreement. The edge
+zone is where most remaining errors concentrate — these pupae either
+have very different visual context (background transitions from white
+paper to the scanner black border) or are physically truncated (the
+scanner cut them in half). Only 1.7% of all pupae sit in this zone, so
+the model has seen few examples. If future scans keep pupae fully on
+the paper away from the left/right image edges, this error source
+disappears entirely.
 
 **Why v12 over v11:** v12 was re-trained fresh (random init, no warm
-start) on 99 cleaned scans after a manual label cleanup pass that
-removed 2 out-of-image labels and moved 61 labels from inside the 7-8px
-black scanner border onto the first paper pixel. The training loss uses
-a per-pixel spatial underpred weighting (0.75 near the measured left
-border, ramping to 1.5 on paper interior) so the model does not waste
-gradient capacity on the physically unrecoverable half-cut pupae. The
-result: 8 more true positives (8 more pupae found that v11 missed),
-same zero false positives after classifier, ~0.04pp pipeline F1 gain.
+start) on 99 cleaned scans after the cleanup rounds described below.
+The training loss uses a per-pixel spatial underpred weighting (0.75
+near the measured left border, ramping to 1.5 on paper interior) so the
+model does not waste gradient capacity on the physically unrecoverable
+half-cut pupae. The classifier was then retrained on v12's outputs with
+the final cleaned labels. Combined gain over v11 on clean self-eval:
+**+0.17 pp F1** — small in absolute terms but honest (pre-cleanup v11
+numbers were slightly inflated by 26 top-edge artifact labels that have
+since been removed).
+
+**Label cleanup rounds applied (all included in the 10,144 sure labels):**
+1. Active-learning diff review: 134 model-vs-user disagreements triaged;
+   10 accepted (9 deletes + 1 add).
+2. Scanner black-border handling: 2 out-of-image labels removed; 61
+   labels inside the 6-8 px black border moved to the first paper
+   pixel (they represent half-cut pupae whose exact center fell in
+   black).
+3. Top-edge artifact review: 26 sure labels with gy < 20 (top 0.8% of
+   image) were inspected in a dedicated contact-sheet tool and deleted
+   — these were scanner timestamps, thin horizontal lines, or faint
+   shadows mislabeled as pupae.
 
 v6 (`model/pupa_counter_v6.pt`), v7 (`model/pupa_counter_v7.pt`), and
 v11 (`model/pupa_counter_v11.pt`) are retained as reference checkpoints.
@@ -109,9 +140,11 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Dependencies: `torch`, `torchvision`, `numpy`, `opencv-python`, `scikit-image`,
-`openpyxl`. The requirements file pins minimums only, so any recent version
-works.
+Dependencies: `torch`, `torchvision`, `numpy`, `opencv-python`,
+`scikit-image`, `openpyxl`, `matplotlib`. The requirements file pins
+minimums only, so any recent version works. (`matplotlib` is only used
+to draw the end-of-batch rank-distribution plot; if missing, the plot
+is skipped gracefully and everything else still runs.)
 
 > **Apple Silicon users** already get MPS acceleration for free.
 > **CUDA users** will pick up GPU automatically if `torch.cuda.is_available()`.
@@ -151,6 +184,11 @@ python pupa_counter.py scans/ \
 
 ### Output Excel columns
 
+The Excel has **two sheets**. Both are appended to on every run; delete
+the file to start fresh.
+
+**Sheet 1 — `Pupa counts`** (one row per scan):
+
 | Column | Meaning |
 |---|---|
 | `scan_name` | Source filename |
@@ -163,7 +201,28 @@ python pupa_counter.py scans/ \
 | `y_min_of_pupae`, `y_max_of_pupae` | Pixel Y coordinates used for percentile calc |
 | `image_width`, `image_height`      | Original scan dimensions |
 
-Existing files are appended to; delete the file to start fresh.
+**Sheet 2 — `Per pupa detail`** (one row per detected pupa):
+
+| Column | Meaning |
+|---|---|
+| `scan_name`     | Source filename |
+| `pupa_idx`      | 1-based index within its scan |
+| `x_pixel`       | X coordinate of detected center (pixels) |
+| `y_pixel`       | Y coordinate of detected center (pixels) |
+| `rank_pct`      | 0 = image bottom, 100 = image top (float, 2 decimals) |
+| `band`          | `"0-5%"` / `"5-25%"` / `"25-75%"` / `"75-100%"` |
+| `image_height`  | Original scan height (for normalizing `y_pixel` if desired) |
+
+### End-of-batch distribution plot
+
+After every batch run, `pupa_counter.py` writes
+`output/rank_distribution.png`. It has two panels:
+
+1. A global rank-percentile histogram across all pupae in the batch,
+   with dashed vertical lines at the 5% / 25% / 75% band boundaries.
+2. Per-scan small multiples — one mini-histogram per scan so you can
+   see how each vial's pupae cluster along the rank axis (uniform,
+   bimodal, skewed, etc.).
 
 ---
 
@@ -188,11 +247,19 @@ Input (RGB patch, 256×256)
 Output: 1-channel sigmoid heatmap
 ```
 
-Training (v11 default): warm-start from v6 weights on 99 hand-labeled
-scans (~10,172 sure labels after manual cleanup of ~23 noisy labels), 30
-epochs with cosine-annealed Adam (lr 3e-4 → 3e-5). Loss is weighted MSE
-plus hard-example (under-prediction) and anti-FP (over-prediction) terms.
-v6 itself was trained fresh on 60 scans (~6300 labels) with lr 1e-3 → 1e-4.
+Training (v12 default): fresh random init on 99 hand-labeled scans
+(~10,144 sure labels after three rounds of label cleanup), 50 epochs
+with cosine-annealed Adam (lr 7e-4 → 7e-5). Loss is weighted MSE +
+under-prediction (recall) + over-prediction (anti-FP) terms, **with a
+per-pixel spatial weight on the under-prediction term**: 0.75× near the
+measured left black scanner border, ramping to 1.5× on paper interior.
+This directs gradient capacity to recoverable pupae instead of the
+physically-truncated edge cases. Best checkpoint (ep 48) saved by
+lowest non-edge miss count.
+
+Prior checkpoints for reference: v6 was fresh on 60 scans (~6,300
+labels) at lr 1e-3 → 1e-4; v11 was warm-started from v6 on 99 cleaned
+scans at lr 3e-4 → 3e-5.
 
 ---
 
@@ -227,11 +294,12 @@ Expected — tiled inference over a 1000×2500 scan on CPU is 2-3 s. Use
 MPS (Mac) or CUDA for ~0.6 s.
 
 **Results look noisy on my scans**
-The model was trained on 300 dpi, white-paper, tan/brown pupae on blue-ink
-sheets. Very different lighting, different species, or a different scanner
-will degrade accuracy. You'd need to label a few dozen of your own scans
-and fine-tune — see `AGENT_HANDOFF_CNN_JOURNEY_2026-04-14.md` in the sister
-`pupa_counter_publish` repo for the training recipe.
+The model was trained on 300 dpi, white-paper, tan/brown pupae on
+blue-ink sheets. Very different lighting, different species, or a
+different scanner will degrade accuracy. You'd need to label a few
+dozen of your own scans and fine-tune — see `HANDOFF_2026-04-16.md` in
+this repo for the training recipe, data paths, and checkpoint
+inventory.
 
 ---
 
