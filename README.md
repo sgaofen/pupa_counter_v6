@@ -6,15 +6,19 @@ hand-corrected scans, ~10,144 sure labels after multiple rounds of label
 cleanup + scanner black-border handling, with per-pixel spatial loss
 weighting). v6/v7/v11 shipped as reference checkpoints.
 
-One command per scan: you get an annotated PNG and a running Excel log of
-counts. No cloud service, no API key, all inference runs locally on CPU,
-CUDA, or Apple Silicon (MPS).
+One command per scan: you get an annotated PNG, a running Excel log of
+counts (with exact per-pupa heights), and a rank-distribution plot
+after batch runs. No cloud service, no API key, all inference runs
+locally on CPU, CUDA, or Apple Silicon (MPS).
 
 ```
 python pupa_counter.py examples/example_scan.png
 ```
 
-![example](examples/example_output.png)
+![annotated scan](examples/example_output.png)
+
+*(Above: the annotated-scan output. 62 pupae detected on one example
+scan; red line = rank 5%, orange lines = rank 25% / 75%.)*
 
 ## What it does
 
@@ -223,6 +227,100 @@ After every batch run, `pupa_counter.py` writes
 2. Per-scan small multiples — one mini-histogram per scan so you can
    see how each vial's pupae cluster along the rank axis (uniform,
    bimodal, skewed, etc.).
+
+![example distribution](examples/example_distribution.png)
+
+*(Above: `example_distribution.png`, produced from a 10-scan demo batch.
+Top panel = global histogram over 1,009 pupae; bottom grid = one
+mini-histogram per scan, revealing the per-vial shape — e.g. scan 73 is
+skewed low (pupae at image bottom), scan 79 is the opposite, scan 15
+and 30 are bimodal.)*
+
+### Example Excel rows
+
+`examples/example_pupa_counts.xlsx` is committed so you can inspect the
+exact output format before running anything. The two sheets look like:
+
+**Sheet `Pupa counts`** (summary, one row per scan):
+
+| scan_name | total_count | top_5_pct_count | rank_5_to_25 | middle_50 | bottom_25 | y_min | y_max | image_width | image_height |
+|---|---|---|---|---|---|---|---|---|---|
+| Scan_20260313 (5).png  |  88 | 2 |  0 |  78 |  8 |  26 | 1651 | 1116 | 2586 |
+| Scan_20260313 (13).png | 113 | 2 |  0 |  91 | 20 | 193 | 2277 | 1116 | 2586 |
+| Scan_20260313 (30).png |  98 | 2 | 13 |  64 | 19 | 343 | 1379 | 1116 | 2586 |
+
+**Sheet `Per pupa detail`** (one row per detected pupa):
+
+| scan_name | pupa_idx | x_pixel | y_pixel | rank_pct | band | image_height |
+|---|---|---|---|---|---|---|
+| Scan_20260313 (13).png | 1 | 415 |  731 | 74.18 | 25-75% | 2586 |
+| Scan_20260313 (13).png | 2 | 180 |  943 | 64.01 | 25-75% | 2586 |
+| Scan_20260313 (13).png | 3 | 789 | 1127 | 55.18 | 25-75% | 2586 |
+
+---
+
+## Reproduce this pipeline (for AI agents & new collaborators)
+
+Everything needed to reproduce the published numbers is shipped in this
+repo. To perfectly re-run the pipeline on a fresh machine:
+
+```bash
+# 1. Clone
+git clone https://github.com/sgaofen/pupa_counter_v6.git
+cd pupa_counter_v6
+
+# 2. Set up Python env (3.9+)
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# 3. Verify on the shipped example scan (1 image)
+python pupa_counter.py examples/example_scan.png
+# → output/example_scan_counted.png      annotated PNG
+# → output/pupa_counts.xlsx              2-sheet Excel (summary + per-pupa)
+# → output/rank_distribution.png         histogram + per-scan small multiples
+
+# 4. Batch on your own folder of scans
+python pupa_counter.py path/to/scans_folder/ --out results/ --excel results/my_counts.xlsx
+```
+
+Default model (`model/pupa_counter_v12.pt`) + classifier
+(`model/peak_filter_clf.pkl`) are already included. You do **not** need
+to retrain anything to use the pipeline — everything is ready for
+inference on first clone.
+
+**Expected performance on the same 99-scan label set used to train:**
+F1 = 99.46 %, precision = 100 %, recall = 98.93 % (see §Accuracy above).
+On new scans from the same scanner + paper protocol, expect precision
+to stay ≈100 % and recall to sit in the 98–99 % range, with most misses
+concentrated in the first 10 px of the left black scanner border.
+
+### For a new Claude Code / AI-agent session
+
+If you are an agent picking this repo up cold, read these in order:
+
+1. `README.md` (this file) — high-level overview + reproduction steps.
+2. `HANDOFF_2026-04-16.md` — complete inventory of model versions,
+   training history, known issues, next-step options, paths to
+   artifacts in the sister `pupa_counter_publish` repo (training code,
+   labels, scripts). Tells you *why* the current pipeline looks the way
+   it does.
+3. `pupa_counter.py` — the full inference script (single file, no
+   hidden dependencies). ~500 lines. Read top-to-bottom to understand
+   tile inference, classifier filter, rank rendering, Excel export, and
+   distribution plot generation.
+
+Common tasks a new agent might be asked to do, with the right entry
+point:
+
+| Task | Start here |
+|---|---|
+| Count pupae on a new folder of scans | `python pupa_counter.py scans/` |
+| Understand why F1 isn't 100 % | §Accuracy (this file) + `HANDOFF_2026-04-16.md` error breakdown |
+| Compare v12 to an older model | `--model model/pupa_counter_v11.pt` (pair with `--model` + the matching `peak_filter_clf_v{3,4}.pkl`; see §Accuracy) |
+| Add new training data | Sister repo `pupa_counter_publish/` — labels live in `tmp/whole_scan_labels.json`, labeling GUI is `scripts/label_whole_scan.py` |
+| Retrain CNN | Sister repo `pupa_counter_publish/scripts/train_v12.py` (reference config in `HANDOFF_2026-04-16.md`) |
+| Retrain classifier only | Sister repo `pupa_counter_publish/scripts/train_clf_v5_and_eval.py` |
 
 ---
 
