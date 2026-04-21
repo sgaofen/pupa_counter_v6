@@ -4,3 +4,4 @@ numpy
 opencv-python
 scikit-image
 openpyxl
+matplotlib

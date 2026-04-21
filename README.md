@@ -32,22 +32,21 @@ For every scan you feed it, the program:
 7. Appends one row to `output/pupa_counts.xlsx` — re-run it on new scans
    and the Excel keeps growing.
 
-The rank convention follows the lab's sorting workflow where the **top of
-the pupa ranking is at the BOTTOM of the image**:
+The rank convention is purely positional — no value judgement:
 
-| Image Y-coord | Rank % | Meaning |
+| Image Y-coord | Rank % | Where the pupa sits in the image |
 |---|---|---|
-| Bottommost pupa  | 0%   | Best pupa (top of ranking) |
-| Topmost pupa     | 100% | Worst pupa (bottom of ranking) |
+| Bottommost pupa  | 0%   | Image BOTTOM  (largest y) |
+| Topmost pupa     | 100% | Image TOP     (smallest y) |
 
 Four regions & counts reported:
 
 | Band       | Meaning |
 |---|---|
-| Rank 0 - 5%    | Top 5% best pupae (red line in image) |
-| Rank 5 - 25%   | Next tier |
+| Rank 0 - 5%    | Top of ranking — pupae at image bottom (red line) |
+| Rank 5 - 25%   | Next 20% |
 | Rank 25 - 75%  | Middle 50% |
-| Rank 75 - 100% | Bottom 25% worst pupae |
+| Rank 75 - 100% | Bottom of ranking — pupae at image top |
 
 The 5% line is drawn in red; 25% and 75% in orange.
 
@@ -157,10 +156,10 @@ python pupa_counter.py scans/ \
 | `scan_name` | Source filename |
 | `timestamp` | ISO-8601 time of processing |
 | `total_count` | All pupae detected |
-| `top_5_pct_count`        | Pupae at rank 0-5% (best) |
+| `top_5_pct_count`        | Pupae at rank 0-5% (image bottom 5%) |
 | `rank_5_to_25_pct_count` | Pupae at rank 5-25% |
 | `middle_50_pct_count`    | Pupae at rank 25-75% (middle 50%) |
-| `bottom_25_pct_count`    | Pupae at rank 75-100% (worst) |
+| `bottom_25_pct_count`    | Pupae at rank 75-100% (image top 25%) |
 | `y_min_of_pupae`, `y_max_of_pupae` | Pixel Y coordinates used for percentile calc |
 | `image_width`, `image_height`      | Original scan dimensions |
 

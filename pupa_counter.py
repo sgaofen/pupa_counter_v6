@@ -19,10 +19,10 @@ For each scan the script:
   1. Runs the v12 CNN model on the image.
   2. Detects pupa centers via heatmap peak extraction.
   3. Splits the image at 25% and 75% horizontal lines.
-     Convention: BOTTOM of image = TOP of pupa ranking (best pupae).
-       - Lower 25% of image  = "top 25% pupae" (physically best / highest rank)
-       - Middle 50% of image = "middle 50% pupae"
-       - Upper 25% of image  = "bottom 25% pupae" (lowest rank)
+     Convention: rank 0% = pupa at IMAGE BOTTOM, rank 100% = pupa at IMAGE TOP.
+       - Lower 25% of image  = rank 0-25% band
+       - Middle 50% of image = rank 25-75% band
+       - Upper 25% of image  = rank 75-100% band
   4. Draws detections + split lines; saves annotated PNG to output/.
   5. Appends a row to the Excel results file
      (created automatically on first run).
@@ -221,13 +221,16 @@ DOT_RADIUS = 5
 
 
 def render_annotated(img_bgr: np.ndarray, peaks: list[tuple[int, int]],
-                     scan_name: str) -> tuple[np.ndarray, dict]:
+                     scan_name: str) -> tuple[np.ndarray, dict, list]:
     """Draw detections + split lines + header.
 
     Percentile lines are based on detected-pupa Y range:
-        0%   = bottommost pupa in image (TOP of pupa ranking, best)
-        100% = topmost pupa in image (BOTTOM of pupa ranking, worst)
+        rank 0%   = pupa at image BOTTOM (largest y, physically highest in vial)
+        rank 100% = pupa at image TOP    (smallest y, physically lowest in vial)
     Lines at rank 5%, 25%, 75%.
+
+    Returns (annotated_img, counts_dict, per_pupa_list) where per_pupa_list
+    is one dict per detected pupa with its exact rank percentile and band.
     """
     h, w = img_bgr.shape[:2]
 
@@ -240,16 +243,17 @@ def render_annotated(img_bgr: np.ndarray, peaks: list[tuple[int, int]],
         "y_min_of_pupae": None,
         "y_max_of_pupae": None,
     }
+    per_pupa = []
 
     if peaks:
         ys = np.array([y for x, y in peaks])
-        y_min = int(ys.min())   # topmost pupa (smallest y) = worst rank
-        y_max = int(ys.max())   # bottommost pupa (largest y) = best rank
+        y_min = int(ys.min())   # topmost pupa in image (smallest y) = rank 100
+        y_max = int(ys.max())   # bottommost pupa in image (largest y) = rank 0
         y_range = max(1, y_max - y_min)
         counts["y_min_of_pupae"] = y_min
         counts["y_max_of_pupae"] = y_max
 
-        # Line y for rank p (0 = best, 100 = worst)
+        # Line y for rank p (0 = image bottom, 100 = image top)
         def line_y(p: float) -> int:
             return int(y_max - (p / 100.0) * y_range)
 
@@ -257,15 +261,30 @@ def render_annotated(img_bgr: np.ndarray, peaks: list[tuple[int, int]],
         y_25 = line_y(25)
         y_75 = line_y(75)
 
-        for x, y in peaks:
-            if y >= y_5:               # rank 0-5%
+        for idx, (x, y) in enumerate(peaks):
+            # rank_pct: 0 = image bottom (largest y) → 100 = image top (smallest y)
+            rank_pct = (y_max - y) / y_range * 100.0
+            if y >= y_5:
+                band = "0-5%"
                 counts["top_5_pct"] += 1
-            elif y >= y_25:            # rank 5-25%
+            elif y >= y_25:
+                band = "5-25%"
                 counts["rank_5_to_25_pct"] += 1
-            elif y >= y_75:            # rank 25-75%
+            elif y >= y_75:
+                band = "25-75%"
                 counts["middle_50_pct"] += 1
-            else:                       # rank 75-100%
+            else:
+                band = "75-100%"
                 counts["bottom_25_pct"] += 1
+            per_pupa.append({
+                "scan_name": scan_name,
+                "pupa_idx": idx + 1,
+                "x_pixel": int(x),
+                "y_pixel": int(y),
+                "rank_pct": round(rank_pct, 2),
+                "band": band,
+                "image_height": h,
+            })
     else:
         y_5 = y_25 = y_75 = None
 
@@ -295,39 +314,50 @@ def render_annotated(img_bgr: np.ndarray, peaks: list[tuple[int, int]],
                 font, 0.65, (0, 0, 0), 2)
     cv2.putText(final, "Rank lines = percentiles of detected-pupa Y range",
                 (20, 90), font, 0.45, (80, 80, 80), 1)
-    cv2.putText(final, "(0% = best pupa at image BOTTOM ; 100% = worst pupa at image TOP)",
+    cv2.putText(final, "(rank 0% = pupa at IMAGE BOTTOM ; rank 100% = pupa at IMAGE TOP)",
                 (20, 110), font, 0.42, (80, 80, 80), 1)
 
     y_text = 140
-    cv2.putText(final, f"Rank  0 - 5%   (top 5% - BEST):       {counts['top_5_pct']}",
+    cv2.putText(final, f"Rank  0 - 5%   (top of ranking):       {counts['top_5_pct']}",
                 (20, y_text), font, 0.55, LINE_COLOR_5, 2)
-    cv2.putText(final, f"Rank  5 - 25%  (next tier):           {counts['rank_5_to_25_pct']}",
+    cv2.putText(final, f"Rank  5 - 25%:                         {counts['rank_5_to_25_pct']}",
                 (20, y_text + 30), font, 0.55, (0, 0, 0), 2)
-    cv2.putText(final, f"Rank 25 - 75%  (middle 50%):          {counts['middle_50_pct']}",
+    cv2.putText(final, f"Rank 25 - 75%  (middle 50%):           {counts['middle_50_pct']}",
                 (20, y_text + 60), font, 0.55, (0, 0, 0), 2)
-    cv2.putText(final, f"Rank 75 - 100% (bottom 25% - WORST):  {counts['bottom_25_pct']}",
+    cv2.putText(final, f"Rank 75 - 100% (bottom of ranking):    {counts['bottom_25_pct']}",
                 (20, y_text + 90), font, 0.55, (0, 0, 0), 2)
-    return final, counts
+    return final, counts, per_pupa
 
 
 # ----------------------------------------------------------------------------
 # Excel export
 # ----------------------------------------------------------------------------
 
+SUMMARY_SHEET = "Pupa counts"
+DETAIL_SHEET = "Per pupa detail"
+
 EXCEL_HEADERS = [
     "scan_name", "timestamp", "total_count",
-    "top_5_pct_count",         # rank 0-5% (best)
+    "top_5_pct_count",         # rank 0-5% (pupae closest to image BOTTOM)
     "rank_5_to_25_pct_count",  # rank 5-25%
     "middle_50_pct_count",     # rank 25-75%
-    "bottom_25_pct_count",     # rank 75-100% (worst)
+    "bottom_25_pct_count",     # rank 75-100% (pupae closest to image TOP)
     "y_min_of_pupae", "y_max_of_pupae",
     "image_width", "image_height",
 ]
 
+DETAIL_HEADERS = [
+    "scan_name", "pupa_idx", "x_pixel", "y_pixel",
+    "rank_pct",     # 0 = image bottom (largest y) … 100 = image top (smallest y)
+    "band",
+    "image_height",
+]
+
 
 def append_to_excel(excel_path: Path, scan_name: str, counts: dict,
-                    total: int, img_w: int, img_h: int) -> None:
-    """Append a row to the Excel file. Creates it if absent."""
+                    total: int, img_w: int, img_h: int,
+                    per_pupa: list) -> None:
+    """Append one summary row + N per-pupa rows to the Excel file."""
     try:
         from openpyxl import Workbook, load_workbook
     except ImportError:
@@ -336,13 +366,16 @@ def append_to_excel(excel_path: Path, scan_name: str, counts: dict,
 
     if excel_path.exists():
         wb = load_workbook(excel_path)
-        ws = wb.active
     else:
         wb = Workbook()
-        ws = wb.active
-        ws.title = "Pupa counts"
-        ws.append(EXCEL_HEADERS)
+        wb.remove(wb.active)  # drop the default blank sheet
 
+    # --- Summary sheet ---
+    if SUMMARY_SHEET in wb.sheetnames:
+        ws = wb[SUMMARY_SHEET]
+    else:
+        ws = wb.create_sheet(SUMMARY_SHEET, 0)
+        ws.append(EXCEL_HEADERS)
     ws.append([
         scan_name,
         datetime.now().isoformat(timespec="seconds"),
@@ -356,6 +389,17 @@ def append_to_excel(excel_path: Path, scan_name: str, counts: dict,
         img_w,
         img_h,
     ])
+
+    # --- Per-pupa detail sheet ---
+    if DETAIL_SHEET in wb.sheetnames:
+        ws2 = wb[DETAIL_SHEET]
+    else:
+        ws2 = wb.create_sheet(DETAIL_SHEET)
+        ws2.append(DETAIL_HEADERS)
+    for p in per_pupa:
+        ws2.append([p["scan_name"], p["pupa_idx"], p["x_pixel"], p["y_pixel"],
+                    p["rank_pct"], p["band"], p["image_height"]])
+
     wb.save(excel_path)
 
 
@@ -382,14 +426,14 @@ def process_one(model: TinyUNet, device: torch.device, src: Path,
         peaks = raw_peaks
         n_filtered = 0
 
-    annotated, counts = render_annotated(img_bgr, peaks, src.name)
+    annotated, counts, per_pupa = render_annotated(img_bgr, peaks, src.name)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     out_img = out_dir / f"{src.stem}_counted.png"
     cv2.imwrite(str(out_img), annotated)
 
     h, w = img_bgr.shape[:2]
-    append_to_excel(excel_path, src.name, counts, len(peaks), w, h)
+    append_to_excel(excel_path, src.name, counts, len(peaks), w, h, per_pupa)
 
     filter_info = f"(filtered {n_filtered} FPs)" if n_filtered > 0 else ""
     print(f"[done] {src.name:40s} total={len(peaks):4d} {filter_info:>18}  "
@@ -460,8 +504,81 @@ def main() -> None:
     for img_path in images:
         process_one(model, device, img_path, args.out, args.excel, classifier=classifier)
 
+    # Distribution plot: one global histogram + per-scan small multiples
+    try:
+        plot_path = args.out / "rank_distribution.png"
+        generate_distribution_plot(args.excel, plot_path)
+        print(f"Distribution plot: {plot_path}")
+    except Exception as exc:
+        print(f"(skipped distribution plot: {exc})")
+
     print(f"\nDone. Annotated images: {args.out}")
     print(f"Excel log: {args.excel}")
+
+
+def generate_distribution_plot(excel_path: Path, out_png: Path) -> None:
+    """Read the per-pupa detail sheet and produce a 2-panel matplotlib figure:
+    (left) global rank-percentile histogram across all pupae;
+    (right) small multiples: one histogram per scan."""
+    from openpyxl import load_workbook
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    wb = load_workbook(excel_path, read_only=True, data_only=True)
+    if DETAIL_SHEET not in wb.sheetnames:
+        raise RuntimeError(f"sheet '{DETAIL_SHEET}' not found")
+    ws = wb[DETAIL_SHEET]
+    rows = list(ws.iter_rows(min_row=2, values_only=True))
+    if not rows:
+        raise RuntimeError("no per-pupa rows to plot")
+
+    from collections import defaultdict
+    all_ranks = []
+    by_scan = defaultdict(list)
+    for scan_name, pupa_idx, x_px, y_px, rank_pct, band, img_h in rows:
+        if rank_pct is None:
+            continue
+        all_ranks.append(float(rank_pct))
+        by_scan[scan_name].append(float(rank_pct))
+
+    scans = sorted(by_scan.keys())
+    n_scans = len(scans)
+    # Grid layout: at most 5 columns, grow rows as needed
+    cols = min(5, max(1, n_scans))
+    rows_grid = (n_scans + cols - 1) // cols
+
+    fig = plt.figure(figsize=(14, 4 + 1.8 * rows_grid))
+    gs = fig.add_gridspec(1 + rows_grid, cols, height_ratios=[2.2] + [1] * rows_grid)
+
+    # Global histogram
+    ax = fig.add_subplot(gs[0, :])
+    ax.hist(all_ranks, bins=20, range=(0, 100), color="steelblue", edgecolor="white")
+    ax.axvline(5, color="red", linestyle="--", linewidth=1, label="5%")
+    ax.axvline(25, color="orange", linestyle="--", linewidth=1, label="25%")
+    ax.axvline(75, color="orange", linestyle="--", linewidth=1, label="75%")
+    ax.set_xlabel("Rank percentile (0 = image bottom  →  100 = image top)")
+    ax.set_ylabel("Pupa count")
+    ax.set_title(f"Rank distribution across all {len(all_ranks)} pupae "
+                 f"in {n_scans} scans")
+    ax.legend(loc="upper right", fontsize=8)
+    ax.set_xlim(0, 100)
+
+    # Per-scan small multiples
+    for i, scan_name in enumerate(scans):
+        r = 1 + i // cols
+        c = i % cols
+        axi = fig.add_subplot(gs[r, c])
+        axi.hist(by_scan[scan_name], bins=15, range=(0, 100),
+                 color="steelblue", edgecolor="white")
+        axi.set_title(scan_name.replace("Scan_20260313 ", "").replace(".png", ""),
+                      fontsize=8)
+        axi.set_xlim(0, 100)
+        axi.tick_params(axis="both", labelsize=7)
+
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=120)
+    plt.close(fig)
 
 
 if __name__ == "__main__":
