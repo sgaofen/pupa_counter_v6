@@ -461,6 +461,10 @@ def main() -> None:
                         help="Path to model weights (default: ./model/pupa_counter_v12.pt)")
     parser.add_argument("--no-filter", action="store_true",
                         help="Disable the peak-level FP classifier (useful for debugging).")
+    parser.add_argument("--json-out", type=str, default=None,
+                        help="Emit detection as JSON instead of PNG+Excel. "
+                             "Use '-' for stdout. Skips all disk writes; "
+                             "designed for the desktop app's subprocess call.")
     args = parser.parse_args()
 
     device = pick_device()
@@ -497,6 +501,61 @@ def main() -> None:
     else:
         print(f"ERROR: {args.input} is not a file or directory")
         sys.exit(1)
+
+    # --- JSON mode: skip disk writes, emit JSON for desktop-app subprocess --
+    if args.json_out:
+        import json
+        results = []
+        for img_path in images:
+            img_bgr = cv2.imread(str(img_path))
+            if img_bgr is None:
+                continue
+            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            heatmap = predict_heatmap(model, img_rgb, device)
+            raw_peaks = extract_peaks(heatmap)
+            if classifier is not None:
+                peaks = filter_false_positives(raw_peaks, heatmap, img_rgb, classifier)
+            else:
+                peaks = raw_peaks
+            _, counts, per_pupa = render_annotated(img_bgr, peaks, img_path.name)
+            h, w = img_bgr.shape[:2]
+            results.append({
+                "imagePath": str(img_path),
+                "imageWidth": w,
+                "imageHeight": h,
+                "modelVersion": args.model.name,
+                "pupae": [
+                    {
+                        "index": p["pupa_idx"],
+                        "x": p["x_pixel"],
+                        "y": p["y_pixel"],
+                        "rankPct": p["rank_pct"],
+                        "band": p["band"],
+                        "source": "cnn",
+                    }
+                    for p in per_pupa
+                ],
+                "counts": {
+                    "total": len(peaks),
+                    "top5Pct": counts["top_5_pct"],
+                    "rank5To25": counts["rank_5_to_25_pct"],
+                    "middle50": counts["middle_50_pct"],
+                    "bottom25": counts["bottom_25_pct"],
+                },
+                "yMin": counts["y_min_of_pupae"],
+                "yMax": counts["y_max_of_pupae"],
+            })
+        payload = results[0] if len(results) == 1 else results
+        text = json.dumps(payload, separators=(",", ":"))
+        if args.json_out == "-":
+            # Sentinel + JSON — makes it trivial for a subprocess reader to
+            # skip any unrelated stdout noise (e.g. "Device: mps").
+            print("<<<JSON>>>")
+            print(text)
+            print("<<<END>>>")
+        else:
+            Path(args.json_out).write_text(text)
+        return
 
     print(f"Processing {len(images)} image(s), writing to {args.excel}\n")
     args.excel.parent.mkdir(parents=True, exist_ok=True)
