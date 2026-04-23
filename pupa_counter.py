@@ -504,49 +504,72 @@ def main() -> None:
 
     # --- JSON mode: skip disk writes, emit JSON for desktop-app subprocess --
     if args.json_out:
-        import json
+        import json, os, tempfile
+        # ONE entry per requested image, in input order. Failed decodes
+        # produce {"imagePath", "error"} records so the caller can align
+        # responses to requests 1:1 and distinguish "no pupae" from
+        # "image unreadable".
         results = []
         for img_path in images:
-            img_bgr = cv2.imread(str(img_path))
-            if img_bgr is None:
-                continue
-            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-            heatmap = predict_heatmap(model, img_rgb, device)
-            raw_peaks = extract_peaks(heatmap)
-            if classifier is not None:
-                peaks = filter_false_positives(raw_peaks, heatmap, img_rgb, classifier)
-            else:
-                peaks = raw_peaks
-            _, counts, per_pupa = render_annotated(img_bgr, peaks, img_path.name)
-            h, w = img_bgr.shape[:2]
-            results.append({
-                "imagePath": str(img_path),
-                "imageWidth": w,
-                "imageHeight": h,
-                "modelVersion": args.model.name,
-                "pupae": [
-                    {
-                        "index": p["pupa_idx"],
-                        "x": p["x_pixel"],
-                        "y": p["y_pixel"],
-                        "rankPct": p["rank_pct"],
-                        "band": p["band"],
-                        "source": "cnn",
-                    }
-                    for p in per_pupa
-                ],
-                "counts": {
-                    "total": len(peaks),
-                    "top5Pct": counts["top_5_pct"],
-                    "rank5To25": counts["rank_5_to_25_pct"],
-                    "middle50": counts["middle_50_pct"],
-                    "bottom25": counts["bottom_25_pct"],
-                },
-                "yMin": counts["y_min_of_pupae"],
-                "yMax": counts["y_max_of_pupae"],
-            })
-        payload = results[0] if len(results) == 1 else results
+            try:
+                img_bgr = cv2.imread(str(img_path))
+                if img_bgr is None:
+                    results.append({
+                        "imagePath": str(img_path),
+                        "error": "imread returned None (corrupt, unsupported format, or unreadable)",
+                    })
+                    continue
+                img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+                heatmap = predict_heatmap(model, img_rgb, device)
+                raw_peaks = extract_peaks(heatmap)
+                if classifier is not None:
+                    peaks = filter_false_positives(raw_peaks, heatmap, img_rgb, classifier)
+                else:
+                    peaks = raw_peaks
+                _, counts, per_pupa = render_annotated(img_bgr, peaks, img_path.name)
+                h, w = img_bgr.shape[:2]
+                results.append({
+                    "imagePath": str(img_path),
+                    "imageWidth": w,
+                    "imageHeight": h,
+                    "modelVersion": args.model.name,
+                    "pupae": [
+                        {
+                            "index": p["pupa_idx"],
+                            "x": p["x_pixel"],
+                            "y": p["y_pixel"],
+                            "rankPct": p["rank_pct"],
+                            "band": p["band"],
+                            "source": "cnn",
+                        }
+                        for p in per_pupa
+                    ],
+                    "counts": {
+                        "total": len(peaks),
+                        "top5Pct": counts["top_5_pct"],
+                        "rank5To25": counts["rank_5_to_25_pct"],
+                        "middle50": counts["middle_50_pct"],
+                        "bottom25": counts["bottom_25_pct"],
+                    },
+                    "yMin": counts["y_min_of_pupae"],
+                    "yMax": counts["y_max_of_pupae"],
+                })
+            except Exception as exc:
+                import traceback as _tb
+                results.append({
+                    "imagePath": str(img_path),
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "traceback": _tb.format_exc(),
+                })
+        # Top-level shape is driven by whether the user passed a FILE or a
+        # DIRECTORY, not by how many succeeded. Callers can rely on this.
+        if args.input.is_file():
+            payload = results[0]
+        else:
+            payload = results
         text = json.dumps(payload, separators=(",", ":"))
+
+        # --- Writing JSON to stdout or a file ---
         if args.json_out == "-":
             # Sentinel + JSON — makes it trivial for a subprocess reader to
             # skip any unrelated stdout noise (e.g. "Device: mps").
@@ -554,7 +577,31 @@ def main() -> None:
             print(text)
             print("<<<END>>>")
         else:
-            Path(args.json_out).write_text(text)
+            out_path = Path(args.json_out).resolve()
+            # Refuse to overwrite any input image — a caller-side path bug
+            # must not silently truncate a scan.
+            input_resolved = {Path(p).resolve() for p in images}
+            if out_path in input_resolved:
+                print(f"ERROR: --json-out resolves to an input image, refusing: {out_path}",
+                      file=sys.stderr)
+                sys.exit(3)
+            # Atomic write: tmp file in the same directory, then rename.
+            # Avoids half-written JSON if the process dies mid-write.
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=out_path.stem + ".", suffix=".tmp.json",
+                dir=str(out_path.parent),
+            )
+            try:
+                with os.fdopen(fd, "w") as tmpf:
+                    tmpf.write(text)
+                os.replace(tmp_name, out_path)
+            except Exception:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+                raise
         return
 
     print(f"Processing {len(images)} image(s), writing to {args.excel}\n")

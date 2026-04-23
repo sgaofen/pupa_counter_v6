@@ -59,16 +59,32 @@ from pupa_counter import (  # type: ignore
 
 
 def main() -> None:
-    model_path = HERE / "model" / "pupa_counter_v12.pt"
-    device = pick_device()
-    model = TinyUNet().to(device)
-    model.load_state_dict(torch.load(model_path, map_location=device))
-    model.eval()
+    # Wrap startup in a guard so missing/corrupt model files produce a
+    # machine-readable error line before we exit — otherwise the desktop
+    # app sees a silent EOF and has no way to distinguish "worker is
+    # still loading" from "worker died".
+    try:
+        model_path = HERE / "model" / "pupa_counter_v12.pt"
+        if not model_path.exists():
+            raise FileNotFoundError(f"model weights not found: {model_path}")
+        device = pick_device()
+        model = TinyUNet().to(device)
+        model.load_state_dict(torch.load(model_path, map_location=device))
+        model.eval()
 
-    classifier = None
-    if CLASSIFIER_PATH.exists():
-        with open(CLASSIFIER_PATH, "rb") as f:
-            classifier = pickle.load(f)
+        classifier = None
+        if CLASSIFIER_PATH.exists():
+            with open(CLASSIFIER_PATH, "rb") as f:
+                classifier = pickle.load(f)
+    except Exception as exc:
+        sys.stdout.write(json.dumps({
+            "ready": False,
+            "stage": "startup",
+            "error": f"{type(exc).__name__}: {exc}",
+            "traceback": traceback.format_exc(),
+        }) + "\n")
+        sys.stdout.flush()
+        sys.exit(2)
 
     sys.stdout.write(json.dumps({
         "ready": True,
