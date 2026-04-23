@@ -95,12 +95,44 @@ PEAK_MIN_DIST = 8
 
 
 def pick_device() -> torch.device:
-    """Prefer MPS (Apple Silicon) > CUDA > CPU."""
+    """Pick the fastest available inference backend.
+
+    Order: MPS (Apple Silicon) > CUDA (NVIDIA) > XPU (Intel GPU via
+    oneAPI, torch 2.5+) > DirectML (AMD + other Windows GPUs, optional
+    package) > CPU.
+
+    Installing a GPU-capable torch on each platform is the user's job —
+    see scripts/setup_venv.py. This function just picks what's reachable
+    from the currently imported torch.
+    """
     if torch.backends.mps.is_available():
         return torch.device("mps")
     if torch.cuda.is_available():
         return torch.device("cuda")
+    if hasattr(torch, "xpu") and torch.xpu.is_available():
+        return torch.device("xpu")
+    try:
+        import torch_directml  # type: ignore
+        return torch_directml.device()
+    except ImportError:
+        pass
     return torch.device("cpu")
+
+
+def device_description(device: torch.device) -> str:
+    """Human label for the Settings UI / CLI startup banner."""
+    t = device.type
+    if t == "cuda":
+        try: return f"CUDA · {torch.cuda.get_device_name(0)}"
+        except Exception: return "CUDA"
+    if t == "mps":
+        return "Apple Silicon (MPS)"
+    if t == "xpu":
+        try: return f"Intel XPU · {torch.xpu.get_device_name(0)}"
+        except Exception: return "Intel XPU"
+    if t == "privateuseone":   # torch_directml device type
+        return "DirectML (Windows)"
+    return "CPU"
 
 
 def predict_heatmap(model: TinyUNet, img_rgb: np.ndarray, device: torch.device,

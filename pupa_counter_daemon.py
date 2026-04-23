@@ -54,6 +54,7 @@ from pupa_counter import (  # type: ignore
     filter_false_positives,
     render_annotated,
     pick_device,
+    device_description,
     CLASSIFIER_PATH,
 )
 
@@ -89,6 +90,7 @@ def main() -> None:
     sys.stdout.write(json.dumps({
         "ready": True,
         "device": str(device),
+        "deviceName": device_description(device),
         "model": model_path.name,
         "classifier": CLASSIFIER_PATH.name if classifier is not None else None,
     }) + "\n")
