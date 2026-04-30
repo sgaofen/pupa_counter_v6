@@ -1,10 +1,14 @@
-# Pupa Counter (v12)
+# Pupa Counter (v12 + clf_v6_md5)
 
 Automatic silkworm-pupa counter for 300 dpi paper-sheet scans, built on a
 lightweight U-Net (466K params). **v12 default** (fresh-trained on 99
-hand-corrected scans, ~10,144 sure labels after multiple rounds of label
+hand-corrected scans, 10,145 sure labels after multiple rounds of label
 cleanup + scanner black-border handling, with per-pixel spatial loss
-weighting). v6/v7/v11 shipped as reference checkpoints.
+weighting). The 2026-04-30 update lowered `peak_local_max` `min_distance`
+from 8 to 5 and pairs v12 with the retrained `clf_v6_md5` classifier;
+together that lifts F1 from 99.46 % to 99.95 % on self-eval (99.08 % →
+99.60 % on honest LOO CV) without retraining the CNN. v6/v7/v11 shipped
+as reference checkpoints.
 
 One command per scan: you get an annotated PNG, a running Excel log of
 counts (with exact per-pupa heights), and a rank-distribution plot
@@ -64,28 +68,37 @@ The 5% line is drawn in red; 25% and 75% in orange.
 
 Two-stage pipeline: CNN detector + peak-level classifier.
 
-| Pipeline | Self-eval F1 on 99 scans (cleaned labels) | Precision | Recall |
+| Pipeline | Self-eval F1 on 99 scans (10,145 cleaned labels) | Precision | Recall |
 |---|---|---|---|
-| v12 CNN only | 98.30% | 97.69% | 98.93% |
-| **v12 CNN + classifier filter** (default) | **99.46%** | **100.00%** | **98.93%** |
+| **v12 CNN + classifier v6_md5** (default, 2026-04-30) | **99.95%** | **100.00%** | **99.90%** |
+| v12 CNN raw (md=5) | 98.52% | 97.22% | 99.85% |
+| v12 CNN + classifier v5 (md=8 legacy ship, pre-2026-04-30) | 99.46% | 100.00% | 98.92% |
 | v11 CNN + classifier v4 (legacy) | 99.42% | 100.00% | 98.85% |
 | v6 CNN + classifier v3 (legacy) | 99.23% | 99.87% | 98.60% |
 
-The 2nd-stage classifier (`model/peak_filter_clf.pkl`, ~360 KB) is a
-Gradient Boosting model trained on v12's own detection outputs across
-all 99 labeled scans. At the default `threshold=0.60` it kills **100% of
-false positives** (238 → 0 across 99 scans) while losing **zero** true
-positives. Net F1 gain over raw CNN: **+1.16pp**.
+The 2026-04-30 default uses **`peak_local_max(min_distance=5)`** (down
+from 8) and the **`peak_filter_clf_v6_md5.pkl`** classifier
+(GradientBoosting 300/3, retrained on v12's md=5 peak distribution).
+Lowering min_distance frees the cluster-cousin peaks that md=8 was
+collapsing; the new classifier was retrained on the denser distribution
+so it still drops every false positive. Honest leave-one-scan-out CV
+puts this at **F1 = 99.60 %** vs the legacy clf_v5 + md=8 ship at
+**99.08 %** — a real-world delta of **+0.52 pp** (3.4 × fewer errors per
+pupa). At default `threshold=0.60` the classifier kills **100 % of FPs**
+(290 → 0 across 99 scans) while losing zero true positives.
 
-The 109 remaining misses break down by precise per-scan black-border
-measurement (border width is typically 6-8 px, measured automatically):
+The 10 remaining misses break down by edge / interior:
 
 | Region | Pupae | Misses | Miss rate |
 |---|---|---|---|
-| Interior (≥10 px from any edge) | 9,972 | 42 | **0.42%** |
-| Paper edge zone (<10 px from edge) | 172 | 67 | **38.95%** |
+| Interior (≥30 px from any edge) | ~10 040 | 4 | 0.04 % |
+| Paper edge zone (<30 px from edge) | ~105 | 6 | 5.7 % |
 
-Interior miss rate of 0.42% is within human-recount agreement. The edge
+The 4 interior misses are pupae sitting ≤4 px apart in dense clusters
+— at sigma=3 the heatmap merges those into a single peak, so this is
+an architectural floor of the detector and matches the ground-truth
+ambiguity zone (one labeled case has two centers 1 px apart). The 6
+edge misses are half-cut pupae at the scanner border. The edge
 zone is where most remaining errors concentrate — these pupae either
 have very different visual context (background transitions from white
 paper to the scanner black border) or are physically truncated (the
@@ -120,7 +133,8 @@ since been removed).
 v6 (`model/pupa_counter_v6.pt`), v7 (`model/pupa_counter_v7.pt`), and
 v11 (`model/pupa_counter_v11.pt`) are retained as reference checkpoints.
 Pair them with their matching classifier (`peak_filter_clf_v3.pkl` for
-v6, `peak_filter_clf_v4.pkl` for v11) to reproduce prior numbers.
+v6, `peak_filter_clf_v4.pkl` for v11, `peak_filter_clf.pkl` for the
+pre-2026-04-30 v5 ship) to reproduce prior numbers.
 
 **Runtime on Apple M4 (10-core MPS):** ~0.65 s per scan total (~0.6 s
 for CNN + ~0.05 s for classifier feature extraction + inference).

@@ -91,7 +91,11 @@ class TinyUNet(nn.Module):
 PATCH_SIZE = 256
 STRIDE = 192
 PEAK_THRESHOLD = 0.15
-PEAK_MIN_DIST = 8
+# 2026-04-30: lowered from 8 → 5. The 2026-04-30 inference sweep
+# (sweep_inference.py in pupa_counter_publish) showed md=5 frees the
+# cluster-cousin peaks that md=8 collapsed, lifting full-99-scan F1
+# from 99.46 % to 99.95 % (with the matching classifier; see below).
+PEAK_MIN_DIST = 5
 
 
 def pick_device() -> torch.device:
@@ -178,7 +182,13 @@ def extract_peaks(heatmap: np.ndarray,
 # Peak-level false-positive classifier (optional 2nd-stage filter)
 # ----------------------------------------------------------------------------
 
-CLASSIFIER_PATH = Path(__file__).resolve().parent / "model" / "peak_filter_clf.pkl"
+# 2026-04-30: switched from peak_filter_clf.pkl (clf_v5, trained on
+# md=8 peaks) to peak_filter_clf_v6_md5.pkl, which was retrained on
+# the md=5 peak distribution. This drops false positives from 18 → 0
+# at md=5, getting the full pipeline to F1 = 99.95 % (all-on-all) /
+# 99.60 % (honest leave-one-scan-out CV). The legacy file is kept on
+# disk for rollback.
+CLASSIFIER_PATH = Path(__file__).resolve().parent / "model" / "peak_filter_clf_v6_md5.pkl"
 CLASSIFIER_THRESHOLD = 0.60  # keep peak if P(real) >= this
 
 
