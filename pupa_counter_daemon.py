@@ -33,6 +33,7 @@ Usage (typically invoked by Electron main):
 from __future__ import annotations
 
 import json
+import os
 import pickle
 import sys
 import traceback
@@ -59,13 +60,63 @@ from pupa_counter import (  # type: ignore
 )
 
 
+def _resolve(env_name: str, default: Path) -> Path:
+    """Env-var override → absolute path; else default."""
+    raw = os.environ.get(env_name)
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return default
+
+
+def _heat_bbox(heatmap: np.ndarray, blob_thr: float, pad: int):
+    """Bounding box of high-confidence blob (used to crop out blank
+    scanner background on LiDE-style scans where pupae fill < half
+    the bed). Returns (x0, y0, x1, y1) or None if heatmap is empty."""
+    above = heatmap > blob_thr
+    rows = np.any(above, axis=1)
+    if not rows.any():
+        return None
+    cols = np.any(above, axis=0)
+    H, W = heatmap.shape
+    y0 = int(rows.argmax())
+    y1_inv = int(rows[::-1].argmax())
+    x0 = int(cols.argmax())
+    x1_inv = int(cols[::-1].argmax())
+    return (
+        max(0, x0 - pad),
+        max(0, y0 - pad),
+        min(W, W - x1_inv + pad),
+        min(H, H - y1_inv + pad),
+    )
+
+
+# --- Env-var configurable inference parameters --------------------------------
+# Documented in pupa_counter_desktop's electron/main.js where the daemon is
+# spawned. Defaults match the LiDE 300 ship config so a CLI run of the
+# daemon gives the same answers as the desktop app.
+
+_PEAK_THR = float(os.environ.get("PUPA_PEAK_THR", "0.40"))
+_MIN_DIST = int(os.environ.get("PUPA_MIN_DIST", "4"))
+_BBOX_CROP = os.environ.get("PUPA_BBOX_CROP", "1") == "1"
+_BBOX_HEAT_THR = float(os.environ.get("PUPA_BBOX_HEAT_THR", "0.40"))
+_BBOX_PAD = int(os.environ.get("PUPA_BBOX_PAD", "50"))
+_CLF_PROB_THR = float(os.environ.get("PUPA_CLF_PROB_THR", "0.50"))
+
+
 def main() -> None:
     # Wrap startup in a guard so missing/corrupt model files produce a
     # machine-readable error line before we exit — otherwise the desktop
     # app sees a silent EOF and has no way to distinguish "worker is
     # still loading" from "worker died".
     try:
-        model_path = HERE / "model" / "pupa_counter_v12.pt"
+        # Default to LiDE 300 if those weights are present (current ship);
+        # otherwise fall back to the legacy v12 1200 dpi recipe.
+        lide = HERE / "model" / "pupa_counter_lide300.pt"
+        lide_clf = HERE / "model" / "peak_filter_clf_lide300.pkl"
+        model_path = _resolve("PUPA_MODEL_PATH",
+                              lide if lide.exists() else HERE / "model" / "pupa_counter_v12.pt")
+        clf_path = _resolve("PUPA_CLF_PATH",
+                            lide_clf if lide_clf.exists() else CLASSIFIER_PATH)
         if not model_path.exists():
             raise FileNotFoundError(f"model weights not found: {model_path}")
         device = pick_device()
@@ -74,8 +125,8 @@ def main() -> None:
         model.eval()
 
         classifier = None
-        if CLASSIFIER_PATH.exists():
-            with open(CLASSIFIER_PATH, "rb") as f:
+        if clf_path.exists():
+            with open(clf_path, "rb") as f:
                 classifier = pickle.load(f)
     except Exception as exc:
         sys.stdout.write(json.dumps({
@@ -92,7 +143,11 @@ def main() -> None:
         "device": str(device),
         "deviceName": device_description(device),
         "model": model_path.name,
-        "classifier": CLASSIFIER_PATH.name if classifier is not None else None,
+        "classifier": clf_path.name if classifier is not None else None,
+        "config": {
+            "peak_thr": _PEAK_THR, "min_dist": _MIN_DIST,
+            "bbox_crop": _BBOX_CROP, "clf_prob_thr": _CLF_PROB_THR,
+        },
     }) + "\n")
     sys.stdout.flush()
 
@@ -140,9 +195,20 @@ def _detect(image_path: str, model, device, classifier, model_name: str) -> dict
         raise FileNotFoundError(f"could not read image: {image_path}")
     img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
     heatmap = predict_heatmap(model, img_rgb, device)
-    raw_peaks = extract_peaks(heatmap)
+    raw_peaks = extract_peaks(heatmap, threshold=_PEAK_THR, min_dist=_MIN_DIST)
+
+    # Optional bbox crop: drop peaks outside the high-confidence blob
+    # (used on LiDE 300 scans where pupae occupy only part of the bed).
+    if _BBOX_CROP:
+        bbox = _heat_bbox(heatmap, _BBOX_HEAT_THR, _BBOX_PAD)
+        if bbox is not None:
+            x0, y0, x1, y1 = bbox
+            raw_peaks = [(x, y) for x, y in raw_peaks
+                         if x0 <= x < x1 and y0 <= y < y1]
+
     peaks = (
-        filter_false_positives(raw_peaks, heatmap, img_rgb, classifier)
+        filter_false_positives(raw_peaks, heatmap, img_rgb, classifier,
+                               threshold=_CLF_PROB_THR)
         if classifier is not None else raw_peaks
     )
     _, counts, per_pupa = render_annotated(img_bgr, peaks, path.name)

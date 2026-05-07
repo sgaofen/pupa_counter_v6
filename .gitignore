@@ -9,3 +9,6 @@ venv/
 # Output (keep dir via .gitkeep but ignore files)
 output/*
 !output/.gitkeep
+
+# Lab scan data — too large for git, distributed out-of-band
+data/
