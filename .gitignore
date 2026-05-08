@@ -1,7 +1,10 @@
 __pycache__/
 *.py[cod]
 .venv/
+.venv-shipped/
 venv/
+python-runtime/
+python-embed.zip
 .DS_Store
 .idea/
 .vscode/
