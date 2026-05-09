@@ -95,8 +95,8 @@ def _heat_bbox(heatmap: np.ndarray, blob_thr: float, pad: int):
 # spawned. Defaults match the LiDE 300 ship config so a CLI run of the
 # daemon gives the same answers as the desktop app.
 
-_PEAK_THR = float(os.environ.get("PUPA_PEAK_THR", "0.40"))
-_MIN_DIST = int(os.environ.get("PUPA_MIN_DIST", "4"))
+_PEAK_THR = float(os.environ.get("PUPA_PEAK_THR", "0.50"))
+_MIN_DIST = int(os.environ.get("PUPA_MIN_DIST", "3"))
 _BBOX_CROP = os.environ.get("PUPA_BBOX_CROP", "1") == "1"
 _BBOX_HEAT_THR = float(os.environ.get("PUPA_BBOX_HEAT_THR", "0.40"))
 _BBOX_PAD = int(os.environ.get("PUPA_BBOX_PAD", "50"))
